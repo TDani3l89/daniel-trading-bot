@@ -1,117 +1,398 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
 import yfinance as yf
 import plotly.graph_objects as go
 
-st.set_page_config(page_title="Daniel Trading Bot", page_icon="🤖", layout="wide")
+st.set_page_config(
+    page_title="Daniel Trading Bot",
+    page_icon="🤖",
+    layout="wide"
+)
+
 st.title("🤖 Daniel Trading Bot")
-st.caption("MVP de paper trading — fără bani reali și fără conectare la exchange.")
+st.caption(
+    "MVP de paper trading — backtest multi-asset, fără bani reali "
+    "și fără conectare la exchange."
+)
 
+# -----------------------------
+# Setări
+# -----------------------------
 with st.sidebar:
-    st.header("Setări")
-    asset = st.selectbox("Monedă", ["BTC-USD", "ETH-USD", "SOL-USD"])
-    period = st.selectbox("Perioadă", ["6mo", "1y", "2y", "5y"], index=2)
-    starting_balance = st.number_input("Capital virtual (£)", min_value=10.0, value=100.0, step=10.0)
-    fast = st.number_input("Media rapidă", min_value=2, max_value=100, value=20)
-    slow = st.number_input("Media lentă", min_value=fast+1, max_value=300, value=50)
-    fee = st.number_input("Comision per ordin (%)", min_value=0.0, max_value=2.0, value=0.10, step=0.01)/100
-    slippage = st.number_input("Slippage per ordin (%)", min_value=0.0, max_value=2.0, value=0.05, step=0.01)/100
-    invest_pct = st.slider("Capital folosit la intrare (%)", 10, 100, 95)/100
-    run = st.button("▶ Rulează backtest", type="primary")
+    st.header("⚙️ Setări")
 
+    assets = st.multiselect(
+        "Monede",
+        ["BTC-USD", "ETH-USD", "SOL-USD"],
+        default=["BTC-USD", "ETH-USD", "SOL-USD"]
+    )
+
+    period = st.selectbox(
+        "Perioadă",
+        ["6mo", "1y", "2y", "5y", "10y"],
+        index=1
+    )
+
+    starting_balance = st.number_input(
+        "Capital inițial (£)",
+        min_value=10.0,
+        value=100.0,
+        step=10.0
+    )
+
+    fast = st.number_input(
+        "Media rapidă",
+        min_value=2,
+        max_value=200,
+        value=20,
+        step=1
+    )
+
+    slow = st.number_input(
+        "Media lentă",
+        min_value=3,
+        max_value=400,
+        value=50,
+        step=1
+    )
+
+    fee = st.number_input(
+        "Comision per tranzacție (%)",
+        min_value=0.0,
+        max_value=5.0,
+        value=0.10,
+        step=0.01
+    )
+
+    slippage = st.number_input(
+        "Slippage per tranzacție (%)",
+        min_value=0.0,
+        max_value=5.0,
+        value=0.05,
+        step=0.01
+    )
+
+    run = st.button(
+        "▶️ Rulează backtest",
+        type="primary",
+        use_container_width=True
+    )
+
+# -----------------------------
+# Funcții
+# -----------------------------
 def download_data(ticker, period):
-    df = yf.download(ticker, period=period, interval="1d", auto_adjust=True, progress=False)
+    df = yf.download(
+        ticker,
+        period=period,
+        interval="1d",
+        auto_adjust=True,
+        progress=False
+    )
+
+    if df.empty:
+        return pd.DataFrame()
+
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
-    return df[["Close"]].dropna()
 
-def backtest(df):
-    d=df.copy()
-    d["fast"]=d["Close"].rolling(int(fast)).mean()
-    d["slow"]=d["Close"].rolling(int(slow)).mean()
-    d["signal"]=(d["fast"]>d["slow"]).astype(int)
-    d["change"]=d["signal"].diff()
+    df = df[["Close"]].copy()
+    df.columns = ["Close"]
+    df = df.dropna()
 
-    cash=float(starting_balance); units=0.0; trades=[]; equity=[]
-    for dt,row in d.iterrows():
-        price=float(row["Close"])
-        if pd.isna(row["slow"]):
-            equity.append(cash+units*price); continue
-        if row["change"]==1 and units==0 and cash>0:
-            gross=cash*invest_pct
-            buy_price=price*(1+slippage)
-            fee_paid=gross*fee
-            units=max((gross-fee_paid)/buy_price,0)
-            cash-=gross
-            trades.append([dt,"BUY",buy_price,gross,fee_paid])
-        elif row["change"]==-1 and units>0:
-            sell_price=price*(1-slippage)
-            gross=units*sell_price
-            fee_paid=gross*fee
-            cash += gross-fee_paid
-            trades.append([dt,"SELL",sell_price,gross,fee_paid])
-            units=0
-        equity.append(cash+units*price)
+    return df
 
-    last=float(d["Close"].iloc[-1])
-    final=cash+units*last*(1-fee-slippage)
-    eq=pd.Series(equity,index=d.index)
-    eq.iloc[-1]=final
-    peak=eq.cummax()
-    dd=(eq/peak-1)*100
-    sells=[x for x in trades if x[1]=="SELL"]
-    buys=[x for x in trades if x[1]=="BUY"]
-    wins=0
-    for b,s in zip(buys,sells):
-        if s[3]-s[4] > b[3]:
-            wins+=1
-    closed=len(sells)
-    total_fees=sum(x[4] for x in trades)
-    return d,eq,trades,final,float((final/starting_balance-1)*100),float(dd.min()),closed,(wins/closed*100 if closed else 0),total_fees
 
-if run or "result" not in st.session_state:
-    with st.spinner("Descarc date și rulez simularea..."):
-        try:
-            data=download_data(asset,period)
-            if len(data)<int(slow)+5:
-                st.error("Nu sunt suficiente date pentru această perioadă.")
-            else:
-                result=backtest(data)
-                st.session_state.result=result
-                st.session_state.asset=asset
-        except Exception as e:
-            st.error(f"Eroare la date: {e}")
+def run_single_asset_backtest(
+    prices,
+    initial_capital,
+    fast_window,
+    slow_window,
+    fee_pct,
+    slippage_pct
+):
+    df = prices.copy()
 
-if "result" in st.session_state:
-    d,eq,trades,final,ret,dd,closed,winrate,total_fees=st.session_state.result
-    c1,c2,c3,c4,c5=st.columns(5)
-    c1.metric("Sold final", f"£{final:,.2f}")
-    c2.metric("Profit / pierdere", f"£{final-starting_balance:,.2f}", f"{ret:.2f}%")
-    c3.metric("Drawdown maxim", f"{dd:.2f}%")
-    c4.metric("Tranzacții închise", str(closed))
-    c5.metric("Comisioane", f"£{total_fees:.2f}")
+    df["Fast MA"] = df["Close"].rolling(fast_window).mean()
+    df["Slow MA"] = df["Close"].rolling(slow_window).mean()
 
-    fig=go.Figure()
-    fig.add_trace(go.Scatter(x=eq.index,y=eq.values,name="Equity"))
-    fig.update_layout(title="Evoluția capitalului virtual", xaxis_title="Data", yaxis_title="£")
-    st.plotly_chart(fig,use_container_width=True)
+    df["Signal"] = (
+        df["Fast MA"] > df["Slow MA"]
+    ).astype(int)
 
-    st.subheader("Semnale și tranzacții")
-    log=pd.DataFrame(trades,columns=["Data","Tip","Preț","Valoare brută","Comision"])
-    if len(log):
-        st.dataframe(log, use_container_width=True)
-    else:
-        st.info("Strategia nu a găsit tranzacții în perioada aleasă.")
+    df["Position"] = df["Signal"].shift(1).fillna(0)
 
-    st.warning("Acesta este un backtest istoric. Nu garantează profit viitor și nu execută tranzacții reale.")
-st.divider()
+    df["Market Return"] = df["Close"].pct_change().fillna(0)
 
-st.subheader("🔒 Daniel Trading Bot Premium")
-st.write("Accesează funcțiile Premium printr-un abonament lunar.")
+    df["Strategy Return"] = (
+        df["Market Return"] * df["Position"]
+    )
 
-st.link_button(
-    "💳 Abonează-te pentru £9.99/lună",
-    "https://buy.stripe.com/00waEZfwP2MVcof0eaeIw00"
-)
+    trades = (
+        df["Position"].diff().abs().fillna(0)
+    )
+
+    total_cost_pct = (fee_pct + slippage_pct) / 100
+
+    df["Costs"] = trades * total_cost_pct
+
+    df["Net Return"] = (
+        df["Strategy Return"] - df["Costs"]
+    )
+
+    df["Equity"] = (
+        1 + df["Net Return"]
+    ).cumprod() * initial_capital
+
+    df["Buy Hold Equity"] = (
+        df["Close"] / df["Close"].iloc[0]
+    ) * initial_capital
+
+    closed_trades = int(
+        ((df["Position"].diff() == -1).sum())
+    )
+
+    total_fees = (
+        df["Costs"].sum() * initial_capital
+    )
+
+    return df, closed_trades, total_fees
+
+
+def calculate_drawdown(equity):
+    peak = equity.cummax()
+    drawdown = (equity / peak) - 1
+    return drawdown.min() * 100
+
+
+# -----------------------------
+# Backtest
+# -----------------------------
+if run:
+    if not assets:
+        st.error("Selectează cel puțin o monedă.")
+        st.stop()
+
+    if fast >= slow:
+        st.error("Media rapidă trebuie să fie mai mică decât media lentă.")
+        st.stop()
+
+    with st.spinner("Se descarcă datele și se rulează backtestul..."):
+        all_data = {}
+        results = []
+
+        allocation = 1 / len(assets)
+
+        for ticker in assets:
+            data = download_data(ticker, period)
+
+            if data.empty:
+                st.warning(f"Nu s-au găsit date pentru {ticker}.")
+                continue
+
+            capital_for_asset = starting_balance * allocation
+
+            result_df, trades, fees = run_single_asset_backtest(
+                data,
+                capital_for_asset,
+                fast,
+                slow,
+                fee,
+                slippage
+            )
+
+            all_data[ticker] = result_df
+
+            final_equity = result_df["Equity"].iloc[-1]
+            final_buy_hold = result_df["Buy Hold Equity"].iloc[-1]
+
+            results.append({
+                "Monedă": ticker,
+                "Capital alocat": capital_for_asset,
+                "Sold final": final_equity,
+                "Profit/Pierdere": final_equity - capital_for_asset,
+                "Randament %": (
+                    final_equity / capital_for_asset - 1
+                ) * 100,
+                "Buy & Hold %": (
+                    final_buy_hold / capital_for_asset - 1
+                ) * 100,
+                "Drawdown maxim %": calculate_drawdown(
+                    result_df["Equity"]
+                ),
+                "Tranzacții închise": trades,
+                "Comisioane + slippage": fees
+            })
+
+    if not results:
+        st.error("Nu s-au putut descărca datele.")
+        st.stop()
+
+    results_df = pd.DataFrame(results)
+
+    # -----------------------------
+    # Portofoliu comun
+    # -----------------------------
+    portfolio = pd.DataFrame(index=all_data[assets[0]].index)
+
+    portfolio["Equity"] = 0.0
+    portfolio["Buy Hold Equity"] = 0.0
+
+    for ticker in all_data:
+        asset_df = all_data[ticker]
+
+        portfolio["Equity"] += asset_df["Equity"].reindex(
+            portfolio.index
+        ).ffill().fillna(0)
+
+        portfolio["Buy Hold Equity"] += asset_df[
+            "Buy Hold Equity"
+        ].reindex(portfolio.index).ffill().fillna(0)
+
+    final_balance = portfolio["Equity"].iloc[-1]
+    final_buy_hold = portfolio["Buy Hold Equity"].iloc[-1]
+
+    total_profit = final_balance - starting_balance
+
+    total_return = (
+        final_balance / starting_balance - 1
+    ) * 100
+
+    buy_hold_return = (
+        final_buy_hold / starting_balance - 1
+    ) * 100
+
+    max_drawdown = calculate_drawdown(
+        portfolio["Equity"]
+    )
+
+    total_trades = int(
+        results_df["Tranzacții închise"].sum()
+    )
+
+    total_fees = results_df[
+        "Comisioane + slippage"
+    ].sum()
+
+    # -----------------------------
+    # Indicatori principali
+    # -----------------------------
+    st.subheader("📊 Rezultate portofoliu")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    col1.metric(
+        "Sold final",
+        f"£{final_balance:,.2f}"
+    )
+
+    col2.metric(
+        "Profit/Pierdere",
+        f"£{total_profit:,.2f}",
+        f"{total_return:.2f}%"
+    )
+
+    col3.metric(
+        "Drawdown maxim",
+        f"{max_drawdown:.2f}%"
+    )
+
+    col4.metric(
+        "Tranzacții închise",
+        total_trades
+    )
+
+    st.metric(
+        "Comisioane + slippage",
+        f"£{total_fees:,.2f}"
+    )
+
+    # -----------------------------
+    # Grafic
+    # -----------------------------
+    st.subheader("📈 Evoluția portofoliului")
+
+    fig = go.Figure()
+
+    fig.add_trace(
+        go.Scatter(
+            x=portfolio.index,
+            y=portfolio["Equity"],
+            mode="lines",
+            name="Strategie"
+        )
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=portfolio.index,
+            y=portfolio["Buy Hold Equity"],
+            mode="lines",
+            name="Buy & Hold"
+        )
+    )
+
+    fig.update_layout(
+        xaxis_title="Data",
+        yaxis_title="Sold (£)",
+        hovermode="x unified",
+        height=500
+    )
+
+    st.plotly_chart(
+        fig,
+        use_container_width=True
+    )
+
+    # -----------------------------
+    # Rezultate pe monede
+    # -----------------------------
+    st.subheader("🪙 Rezultate pe monede")
+
+    display_df = results_df.copy()
+
+    for column in [
+        "Capital alocat",
+        "Sold final",
+        "Profit/Pierdere",
+        "Comisioane + slippage"
+    ]:
+        display_df[column] = display_df[column].map(
+            lambda x: f"£{x:,.2f}"
+        )
+
+    for column in [
+        "Randament %",
+        "Buy & Hold %",
+        "Drawdown maxim %"
+    ]:
+        display_df[column] = display_df[column].map(
+            lambda x: f"{x:.2f}%"
+        )
+
+    st.dataframe(
+        display_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    # -----------------------------
+    # Date brute și export
+    # -----------------------------
+    st.subheader("📥 Export rezultate")
+
+    csv = results_df.to_csv(index=False).encode("utf-8")
+
+    st.download_button(
+        "Descarcă rezultatele CSV",
+        data=csv,
+        file_name="daniel_trading_multi_asset_results.csv",
+        mime="text/csv"
+    )
+
+else:
+    st.info(
+        "Alege monedele și parametrii din meniul din stânga, "
+        "apoi apasă «Rulează backtest»."
+    )
