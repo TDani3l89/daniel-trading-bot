@@ -106,3 +106,12 @@ if "result" in st.session_state:
         st.info("Strategia nu a găsit tranzacții în perioada aleasă.")
 
     st.warning("Acesta este un backtest istoric. Nu garantează profit viitor și nu execută tranzacții reale.")
+st.divider()
+
+st.subheader("🔒 Daniel Trading Bot Premium")
+st.write("Accesează funcțiile Premium printr-un abonament lunar.")
+
+st.link_button(
+    "💳 Abonează-te pentru £9.99/lună",
+    "https://buy.stripe.com/00waEZfwP2MVcof0eaeIw00"
+)
